@@ -33,7 +33,7 @@ jobs:
           
           scons platform=ios target=editor arch=arm64 generate_bundle=yes -j$(sysctl -n hw.ncpu)
 
-      - name: Prepare Apple Embedded Xcode Template
+         - name: Prepare Apple Embedded Xcode Template
         working-directory: godot
         run: |
           cp -r misc/dist/apple_embedded_xcode ios_project
@@ -45,10 +45,11 @@ jobs:
             cp bin/libgodot.ios.editor.arm64.a ios_project/libgodot.ios.release.xcframework/ios-arm64/libgodot.a
           fi
 
-          find ios_project -name "*Info.plist" -exec sed -i '' 's/$name/GodotEditor/g' {} +
-          find ios_project -name "*Info.plist" -exec sed -i '' 's/$bundle_identifier/org.godotengine.editor.ios/g' {} +
-          find ios_project -name "*Info.plist" -exec sed -i '' 's/$short_version/4.7.2/g' {} +
-          find ios_project -name "*Info.plist" -exec sed -i '' 's/$version/4.7.2/g' {} +
+          # FIXED: Explicitly target only the actual Info.plist files, skipping the internal .xcodeproj structures
+          find ios_project -name "Info.plist" -exec sed -i '' 's/\$name/GodotEditor/g' {} +
+          find ios_project -name "Info.plist" -exec sed -i '' 's/\$bundle_identifier/org.godotengine.editor.ios/g' {} +
+          find ios_project -name "Info.plist" -exec sed -i '' 's/\$short_version/4.7.2/g' {} +
+          find ios_project -name "Info.plist" -exec sed -i '' 's/\$version/4.7.2/g' {} +
 
       - name: Build Unsigned .ipa with Xcode
         working-directory: godot/ios_project
