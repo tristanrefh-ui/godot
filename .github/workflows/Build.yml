@@ -11,7 +11,7 @@ on:
 jobs:
   build-ios-ipa:
     runs-on: macos-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     steps:
       - name: Install Dependencies
@@ -25,15 +25,28 @@ jobs:
           path: godot
           fetch-depth: 1
 
+      # --- SCONS BUILD CACHE SYSTEM ---
+      # This saves your compiled C++ files so future runs take minutes, not hours!
+      - name: Setup SCons Cache
+        uses: actions/cache@v4
+        with:
+          path: godot/.scons_cache
+          key: ${{ runner.os }}-godot-${{ github.event.inputs.godot_tag }}-editor
+          restore-keys: |
+            ${{ runner.os }}-godot-${{ github.event.inputs.godot_tag }}-
+
       - name: Compile Godot 4.7.2 for iOS (Editor Target)
         working-directory: godot
+        env:
+          SCONS_CACHE: .scons_cache
+          SCONS_CACHE_LIMIT: 4096 # Caps cache at 4GB
         run: |
           sed -i '' 's/env\["tools"\] = False/pass/g' platform/ios/detect.py || true
           sed -i '' 's/env\["editor_build"\] = False/pass/g' platform/ios/detect.py || true
           
           scons platform=ios target=editor arch=arm64 generate_bundle=yes -j$(sysctl -n hw.ncpu)
 
-         - name: Prepare Apple Embedded Xcode Template
+      - name: Prepare Apple Embedded Xcode Template
         working-directory: godot
         run: |
           cp -r misc/dist/apple_embedded_xcode ios_project
@@ -45,7 +58,7 @@ jobs:
             cp bin/libgodot.ios.editor.arm64.a ios_project/libgodot.ios.release.xcframework/ios-arm64/libgodot.a
           fi
 
-          # FIXED: Explicitly target only the actual Info.plist files, skipping the internal .xcodeproj structures
+          # FIXED: Target EXACTLY "Info.plist" to avoid corrupting internal Xcode internal configuration project files
           find ios_project -name "Info.plist" -exec sed -i '' 's/\$name/GodotEditor/g' {} +
           find ios_project -name "Info.plist" -exec sed -i '' 's/\$bundle_identifier/org.godotengine.editor.ios/g' {} +
           find ios_project -name "Info.plist" -exec sed -i '' 's/\$short_version/4.7.2/g' {} +
