@@ -17,14 +17,17 @@ jobs:
       - name: Install Dependencies
         run: brew install scons
 
-      - name: Clone Godot Source
-        run: |
-          git clone --depth 1 --branch ${{ github.event.inputs.godot_tag }} https://github.com
+      - name: Checkout Godot Source
+        uses: actions/checkout@v4
+        with:
+          repository: godotengine/godot
+          ref: ${{ github.event.inputs.godot_tag }}
+          path: godot
+          fetch-depth: 1
 
       - name: Compile Godot 4.7.2 for iOS (Editor Target)
         working-directory: godot
         run: |
-          # Allow building the editor UI on iOS by removing the tools=no lock
           sed -i '' 's/env\["tools"\] = False/pass/g' platform/ios/detect.py || true
           sed -i '' 's/env\["editor_build"\] = False/pass/g' platform/ios/detect.py || true
           
@@ -35,7 +38,6 @@ jobs:
         run: |
           cp -r misc/dist/apple_embedded_xcode ios_project
 
-          # Copy the generated xcframework or static library into the Xcode project
           if [ -d "bin/libgodot.ios.editor.arm64.xcframework" ]; then
             cp -r bin/libgodot.ios.editor.arm64.xcframework ios_project/libgodot.ios.release.xcframework
           else
@@ -43,7 +45,6 @@ jobs:
             cp bin/libgodot.ios.editor.arm64.a ios_project/libgodot.ios.release.xcframework/ios-arm64/libgodot.a
           fi
 
-          # Replace template placeholders in Info.plist
           find ios_project -name "*Info.plist" -exec sed -i '' 's/$name/GodotEditor/g' {} +
           find ios_project -name "*Info.plist" -exec sed -i '' 's/$bundle_identifier/org.godotengine.editor.ios/g' {} +
           find ios_project -name "*Info.plist" -exec sed -i '' 's/$short_version/4.7.2/g' {} +
