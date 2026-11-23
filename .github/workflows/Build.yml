@@ -1,12 +1,12 @@
-name: Build Godot iOS Editor IPA
+name: Build Godot 4.7.2 iOS Editor IPA
 
 on:
   workflow_dispatch:
     inputs:
       godot_tag:
-        description: 'Godot Git Tag (e.g., 4.3-stable or 4.4-stable)'
+        description: 'Godot Git Tag'
         required: true
-        default: '4.4-stable'
+        default: '4.7.2-stable'
 
 jobs:
   build-ios-ipa:
@@ -14,48 +14,49 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      - name: Install SCons
+      - name: Install Dependencies
         run: brew install scons
 
       - name: Clone Godot Source
         run: |
           git clone --depth 1 --branch ${{ github.event.inputs.godot_tag }} https://github.com
-          cd godot
 
-      - name: Compile Godot for iOS (Editor Target)
+      - name: Compile Godot 4.7.2 for iOS (Editor Target)
         working-directory: godot
         run: |
-          # Note: Standard upstream Godot forces tools=no on iOS unless patched.
-          # We patch platform/ios/detect.py to allow building the editor UI.
+          # Allow building the editor UI on iOS by removing the tools=no lock
           sed -i '' 's/env\["tools"\] = False/pass/g' platform/ios/detect.py || true
+          sed -i '' 's/env\["editor_build"\] = False/pass/g' platform/ios/detect.py || true
           
           scons platform=ios target=editor arch=arm64 generate_bundle=yes -j$(sysctl -n hw.ncpu)
 
-      - name: Prepare Xcode Template
+      - name: Prepare Apple Embedded Xcode Template
         working-directory: godot
         run: |
-          # Copy the Xcode template (path varies slightly by Godot version)
-          if [ -d "misc/dist/apple_embedded_xcode" ]; then
-            cp -r misc/dist/apple_embedded_xcode ios_project
+          cp -r misc/dist/apple_embedded_xcode ios_project
+
+          # Copy the generated xcframework or static library into the Xcode project
+          if [ -d "bin/libgodot.ios.editor.arm64.xcframework" ]; then
+            cp -r bin/libgodot.ios.editor.arm64.xcframework ios_project/libgodot.ios.release.xcframework
           else
-            cp -r misc/dist/ios_xcode ios_project
+            mkdir -p ios_project/libgodot.ios.release.xcframework/ios-arm64
+            cp bin/libgodot.ios.editor.arm64.a ios_project/libgodot.ios.release.xcframework/ios-arm64/libgodot.a
           fi
 
-          # Copy compiled static library into the xcframework structure
-          mkdir -p ios_project/libgodot.ios.release.xcframework/ios-arm64
-          cp bin/libgodot.ios.editor.arm64.a ios_project/libgodot.ios.release.xcframework/ios-arm64/libgodot.a
-
-          # Replace placeholders in Info.plist so Xcode builds cleanly
-          sed -i '' 's/$name/GodotEditor/g' ios_project/godot_ios/godot_ios-Info.plist || true
-          sed -i '' 's/$bundle_identifier/org.godotengine.editor.ios/g' ios_project/godot_ios/godot_ios-Info.plist || true
-          sed -i '' 's/$short_version/4.4/g' ios_project/godot_ios/godot_ios-Info.plist || true
-          sed -i '' 's/$version/4.4/g' ios_project/godot_ios/godot_ios-Info.plist || true
+          # Replace template placeholders in Info.plist
+          find ios_project -name "*Info.plist" -exec sed -i '' 's/$name/GodotEditor/g' {} +
+          find ios_project -name "*Info.plist" -exec sed -i '' 's/$bundle_identifier/org.godotengine.editor.ios/g' {} +
+          find ios_project -name "*Info.plist" -exec sed -i '' 's/$short_version/4.7.2/g' {} +
+          find ios_project -name "*Info.plist" -exec sed -i '' 's/$version/4.7.2/g' {} +
 
       - name: Build Unsigned .ipa with Xcode
         working-directory: godot/ios_project
         run: |
-          xcodebuild -project godot_ios.xcodeproj \
-            -scheme godot_ios \
+          XCODE_PROJ=$(find . -maxdepth 1 -name "*.xcodeproj" | head -n 1)
+          SCHEME_NAME=$(basename "$XCODE_PROJ" .xcodeproj)
+
+          xcodebuild -project "$XCODE_PROJ" \
+            -scheme "$SCHEME_NAME" \
             -configuration Release \
             -sdk iphoneos \
             -archivePath build/GodotEditor.xcarchive \
@@ -66,10 +67,10 @@ jobs:
 
           mkdir -p Payload
           cp -r build/GodotEditor.xcarchive/Products/Applications/*.app Payload/
-          zip -r GodotEditor-unsigned.ipa Payload
+          zip -r GodotEditor-4.7.2-unsigned.ipa Payload
 
       - name: Upload Unsigned IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: GodotEditor-iOS-IPA
-          path: godot/ios_project/GodotEditor-unsigned.ipa
+          name: GodotEditor-4.7.2-iOS-IPA
+          path: godot/ios_project/GodotEditor-4.7.2-unsigned.ipa
