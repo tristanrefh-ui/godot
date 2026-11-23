@@ -1,50 +1,64 @@
-name: Build Godot 4.7.2 iOS Editor IPA
+name: Build Latest Godot iOS Editor IPA
 
 on:
   workflow_dispatch:
     inputs:
       godot_tag:
-        description: 'Godot Git Tag'
+        description: 'Godot Git Tag (Leave as "latest" to auto-fetch newest stable release)'
         required: true
-        default: '4.7.2-stable'
+        default: 'latest'
 
 jobs:
   build-ios-ipa:
-    runs-on: macos-latest
+    runs-on: macos-14 # Uses Apple Silicon hardware for maximum compilation speeds
     timeout-minutes: 120
 
     steps:
       - name: Install Dependencies
-        run: brew install scons
+        run: brew install scons jq
+
+      - name: Determine Latest Stable Godot Version
+        id: get-version
+        run: |
+          if [ "${{ github.event.inputs.godot_tag }}" = "latest" ]; then
+            # Fetches the absolute latest release tag from the official Godot GitHub repo
+            LATEST_TAG=$(curl -s https://github.com | jq -r '.tag_name')
+            echo "TARGET_TAG=$LATEST_TAG" >> $GITHUB_OUTPUT
+            echo "Found latest Godot release: $LATEST_TAG"
+          else
+            echo "TARGET_TAG=${{ github.event.inputs.godot_tag }}" >> $GITHUB_OUTPUT
+            echo "Using manually requested version: ${{ github.event.inputs.godot_tag }}"
+          fi
 
       - name: Checkout Godot Source
         uses: actions/checkout@v4
         with:
           repository: godotengine/godot
-          ref: ${{ github.event.inputs.godot_tag }}
+          ref: ${{ steps.get-version.outputs.TARGET_TAG }}
           path: godot
           fetch-depth: 1
 
-      # --- SCONS BUILD CACHE SYSTEM ---
-      # This saves your compiled C++ files so future runs take minutes, not hours!
+      # --- DYNAMIC CACHE SYSTEM ---
+      # Automatically creates a separate cache bucket for each unique version of Godot
       - name: Setup SCons Cache
         uses: actions/cache@v4
         with:
           path: godot/.scons_cache
-          key: ${{ runner.os }}-godot-${{ github.event.inputs.godot_tag }}-editor
+          key: ${{ runner.os }}-godot-${{ steps.get-version.outputs.TARGET_TAG }}-full-editor
           restore-keys: |
-            ${{ runner.os }}-godot-${{ github.event.inputs.godot_tag }}-
+            ${{ runner.os }}-godot-
 
-      - name: Compile Godot 4.7.2 for iOS (Editor Target)
+      - name: Compile Godot Engine for iOS (Full Editor Target)
         working-directory: godot
-        env:
-          SCONS_CACHE: .scons_cache
-          SCONS_CACHE_LIMIT: 4096 # Caps cache at 4GB
         run: |
           sed -i '' 's/env\["tools"\] = False/pass/g' platform/ios/detect.py || true
           sed -i '' 's/env\["editor_build"\] = False/pass/g' platform/ios/detect.py || true
           
-          scons platform=ios target=editor arch=arm64 generate_bundle=yes -j$(sysctl -n hw.ncpu)
+          # Fully intact engine configuration with absolute max hardware threads
+          scons platform=ios target=editor arch=arm64 generate_bundle=yes \
+            cache_path=.scons_cache cache_size=4096 \
+            optimize=speed production=yes debug_symbols=no \
+            -j$(sysctl -n hw.ncpu)
 
       - name: Prepare Apple Embedded Xcode Template
         working-directory: godot
@@ -58,34 +72,41 @@ jobs:
             cp bin/libgodot.ios.editor.arm64.a ios_project/libgodot.ios.release.xcframework/ios-arm64/libgodot.a
           fi
 
-          # FIXED: Target EXACTLY "Info.plist" to avoid corrupting internal Xcode internal configuration project files
+          # DYNAMIC PROFILES: Replaces variables with the dynamically fetched engine version name
+          VERSION_CLEAN=$(echo "${{ steps.get-version.outputs.TARGET_TAG }}" | sed 's/-stable//g')
           find ios_project -name "Info.plist" -exec sed -i '' 's/\$name/GodotEditor/g' {} +
-          find ios_project -name "Info.plist" -exec sed -i '' 's/\$bundle_identifier/org.godotengine.editor.ios/g' {} +
-          find ios_project -name "Info.plist" -exec sed -i '' 's/\$short_version/4.7.2/g' {} +
-          find ios_project -name "Info.plist" -exec sed -i '' 's/\$version/4.7.2/g' {} +
+          find ios_project -name "Info.plist" -exec sed -i '' "s/\$bundle_identifier/org.godotengine.editor.ios/g" {} +
+          find ios_project -name "Info.plist" -exec sed -i '' "s/\$short_version/$VERSION_CLEAN/g" {} +
+          find ios_project -name "Info.plist" -exec sed -i '' "s/\$version/$VERSION_CLEAN/g" {} +
 
       - name: Build Unsigned .ipa with Xcode
         working-directory: godot/ios_project
         run: |
           XCODE_PROJ=$(find . -maxdepth 1 -name "*.xcodeproj" | head -n 1)
           SCHEME_NAME=$(basename "$XCODE_PROJ" .xcodeproj)
+          VERSION_CLEAN=$(echo "${{ steps.get-version.outputs.TARGET_TAG }}" | sed 's/-stable//g')
 
           xcodebuild -project "$XCODE_PROJ" \
             -scheme "$SCHEME_NAME" \
             -configuration Release \
             -sdk iphoneos \
+            -parallelizeTargets \
             -archivePath build/GodotEditor.xcarchive \
             archive \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_ALLOWED=NO \
+            DEBUG_INFORMATION_FORMAT=dwarf \
+            COMPILER_INDEX_STORE_ENABLE=NO \
+            VALIDATE_WORKSPACE=NO \
+            GCC_GENERATE_DEBUGGING_SYMBOLS=NO
 
           mkdir -p Payload
           cp -r build/GodotEditor.xcarchive/Products/Applications/*.app Payload/
-          zip -r GodotEditor-4.7.2-unsigned.ipa Payload
+          zip -r "GodotEditor-${VERSION_CLEAN}-unsigned.ipa" Payload
 
       - name: Upload Unsigned IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: GodotEditor-4.7.2-iOS-IPA
-          path: godot/ios_project/GodotEditor-4.7.2-unsigned.ipa
+          name: "GodotEditor-${{ steps.get-version.outputs.TARGET_TAG }}-iOS-IPA"
+          path: "godot/ios_project/GodotEditor-*-unsigned.ipa"
